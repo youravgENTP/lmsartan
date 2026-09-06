@@ -1022,20 +1022,121 @@ export default {
             const weekPosition =
               moduleWeekPosition(module);
 
-        const {
-          data: existingItemRows,
-          error: existingItemsError,
-        } = await ctx.supabaseAdmin
-          .from("canvas_items")
-          .select("course_id,item_id");
+            for (const item of module.items ?? []) {
+              itemsSeen += 1;
 
-        if (existingItemsError) throw existingItemsError;
+              const key =
+                `${course.id}:${item.id}`;
 
-        const existingItems = new Set(
-          (existingItemRows ?? []).map(
-            (row) => `${row.course_id}:${row.item_id}`,
-          ),
-        );
+              const existingItem =
+                existingItems.get(key);
+
+              const isNew =
+                !existingItem;
+
+              if (isNew) newItems += 1;
+
+              currentItemRows.push({
+                course_id: course.id,
+                course_name: course.name!,
+                module_id: module.id,
+                module_name: module.name,
+                item_id: item.id,
+                item_type: item.type,
+                title: item.title,
+                html_url:
+                  item.html_url ?? null,
+                external_url:
+                  item.external_url ?? null,
+                last_seen_at:
+                  new Date().toISOString(),
+              });
+
+              if (moduleBaseline) {
+                continue;
+              }
+
+              const itemAlreadySent =
+                await notificationAlreadySent(
+                  ctx.supabaseAdmin,
+                  "module_item_new",
+                  course.id,
+                  String(item.id),
+                );
+
+              if (itemAlreadySent) {
+                continue;
+              }
+
+              const firstSeenAt =
+                existingItem?.first_seen_at
+                  ? new Date(existingItem.first_seen_at)
+                  : new Date();
+
+              const eligibleForCatchup =
+                isNew ||
+                (
+                  moduleBaselineCutoff !== null &&
+                  firstSeenAt > moduleBaselineCutoff
+                );
+
+              if (!eligibleForCatchup) {
+                continue;
+              }
+
+              let message =
+                `${module.name}\n${item.title}`;
+
+              if (isLearningXItem(item)) {
+                const week =
+                  weekSchedule.get(weekPosition);
+
+                if (week?.unlock_at) {
+                  const unlocked =
+                    new Date(week.unlock_at) <= new Date();
+
+                  if (!unlocked) {
+                    message = [
+                      "새 콘텐츠가 등록되었습니다.",
+                      "아직 공개 전입니다.",
+                      "",
+                      module.name,
+                      item.title,
+                      "",
+                      `공개 예정: ${week.unlock_at}`,
+                    ].join("\n");
+                  } else {
+                    message = [
+                      "새 콘텐츠가 등록되었습니다.",
+                      "",
+                      module.name,
+                      item.title,
+                    ].join("\n");
+                  }
+                } else {
+                  message = [
+                    "새 콘텐츠가 등록되었습니다.",
+                    "",
+                    module.name,
+                    item.title,
+                  ].join("\n");
+                }
+              }
+
+              const sent = await sendLoggedNtfy(
+                ctx.supabaseAdmin,
+                ntfyBaseUrl,
+                ntfyTopic,
+                "module_item_new",
+                course.id,
+                String(item.id),
+                `[LMSartan] ${course.name}`,
+                message,
+                item.html_url,
+              );
+
+              if (sent) notificationsSent += 1;
+            }
           }
         }
 
