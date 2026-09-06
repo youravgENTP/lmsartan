@@ -576,9 +576,22 @@ async function sendLoggedNtfy(
     },
   );
 
+  const responseText =
+    await response.text();
+
+  let ntfyResponse: Record<string, unknown> | null =
+    null;
+
+  try {
+    ntfyResponse =
+      JSON.parse(responseText);
+  } catch {
+    ntfyResponse = null;
+  }
+
   if (!response.ok) {
     const errorMessage =
-      `${response.status} ${response.statusText}: ${await response.text()}`;
+      `${response.status} ${response.statusText}: ${responseText}`;
 
     await admin
       .from("notification_log")
@@ -591,10 +604,19 @@ async function sendLoggedNtfy(
         message,
         status: "error",
         error_message: errorMessage,
+        ntfy_topic: topic,
+        ntfy_response_json: ntfyResponse,
       });
 
     throw new Error(`ntfy error ${errorMessage}`);
   }
+
+  const ntfyMessageTime =
+    typeof ntfyResponse?.time === "number"
+      ? new Date(
+        ntfyResponse.time * 1000,
+      ).toISOString()
+      : null;
 
   const { error } = await admin
     .from("notification_log")
@@ -606,6 +628,18 @@ async function sendLoggedNtfy(
       title,
       message,
       status: "success",
+      ntfy_topic:
+        typeof ntfyResponse?.topic === "string"
+          ? ntfyResponse.topic
+          : topic,
+      ntfy_message_id:
+        typeof ntfyResponse?.id === "string"
+          ? ntfyResponse.id
+          : null,
+      ntfy_message_time:
+        ntfyMessageTime,
+      ntfy_response_json:
+        ntfyResponse,
     });
 
   if (error) throw error;
@@ -668,20 +702,27 @@ export default {
         stage = "checking existing baselines";
 
         const {
-          count: previousSuccessfulRuns,
-          error: runCountError,
+          data: firstSuccessfulRun,
+          error: firstRunError,
         } = await ctx.supabaseAdmin
           .from("watcher_runs")
-          .select("*", {
-            count: "exact",
-            head: true,
+          .select("finished_at")
+          .eq("status", "success")
+          .order("started_at", {
+            ascending: true,
           })
-          .eq("status", "success");
+          .limit(1)
+          .maybeSingle();
 
-        if (runCountError) throw runCountError;
+        if (firstRunError) throw firstRunError;
 
         const moduleBaseline =
-          (previousSuccessfulRuns ?? 0) === 0;
+          !firstSuccessfulRun;
+
+        const moduleBaselineCutoff =
+          firstSuccessfulRun?.finished_at
+            ? new Date(firstSuccessfulRun.finished_at)
+            : null;
 
         const announcementsInitialized =
           await featureInitialized(
@@ -719,13 +760,16 @@ export default {
           error: existingItemsError,
         } = await ctx.supabaseAdmin
           .from("canvas_items")
-          .select("course_id,item_id");
+          .select("course_id,item_id,first_seen_at");
 
         if (existingItemsError) throw existingItemsError;
 
-        const existingItems = new Set(
+        const existingItems = new Map(
           (existingItemRows ?? []).map(
-            (row) => `${row.course_id}:${row.item_id}`,
+            (row) => [
+              `${row.course_id}:${row.item_id}`,
+              row,
+            ],
           ),
         );
 
@@ -978,77 +1022,20 @@ export default {
             const weekPosition =
               moduleWeekPosition(module);
 
-            for (const item of module.items ?? []) {
-              itemsSeen += 1;
+        const {
+          data: existingItemRows,
+          error: existingItemsError,
+        } = await ctx.supabaseAdmin
+          .from("canvas_items")
+          .select("course_id,item_id");
 
-              const key =
-                `${course.id}:${item.id}`;
+        if (existingItemsError) throw existingItemsError;
 
-              const isNew =
-                !existingItems.has(key);
-
-              if (isNew) newItems += 1;
-
-              currentItemRows.push({
-                course_id: course.id,
-                course_name: course.name!,
-                module_id: module.id,
-                module_name: module.name,
-                item_id: item.id,
-                item_type: item.type,
-                title: item.title,
-                html_url:
-                  item.html_url ?? null,
-                external_url:
-                  item.external_url ?? null,
-                last_seen_at:
-                  new Date().toISOString(),
-              });
-
-              if (!isNew || moduleBaseline) {
-                continue;
-              }
-
-              let shouldNotify = true;
-
-              if (isLearningXItem(item)) {
-                const week =
-                  weekSchedule.get(weekPosition);
-
-                if (!week) {
-                  // If LearningX state cannot be established,
-                  // do not falsely alert about a future lecture.
-                  shouldNotify = false;
-                } else {
-                  const unlocked =
-                    week.unlock_at === null ||
-                    new Date(week.unlock_at) <=
-                      new Date();
-
-                  shouldNotify =
-                    unlocked &&
-                    !weeksUnlockedThisRun.has(
-                      weekPosition,
-                    );
-                }
-              }
-
-              if (!shouldNotify) continue;
-
-              const sent = await sendLoggedNtfy(
-                ctx.supabaseAdmin,
-                ntfyBaseUrl,
-                ntfyTopic,
-                "module_item_new",
-                course.id,
-                String(item.id),
-                `[LMSartan] ${course.name}`,
-                `${module.name}\n${item.title}`,
-                item.html_url,
-              );
-
-              if (sent) notificationsSent += 1;
-            }
+        const existingItems = new Set(
+          (existingItemRows ?? []).map(
+            (row) => `${row.course_id}:${row.item_id}`,
+          ),
+        );
           }
         }
 
@@ -1140,9 +1127,26 @@ export default {
 
           const isNew = !previous;
 
-          if (
+          const newAnnouncementAlreadySent =
+            await notificationAlreadySent(
+              ctx.supabaseAdmin,
+              "announcement_new",
+              courseId,
+              String(announcement.id),
+            );
+
+          const needsNewAnnouncement =
             announcementsInitialized &&
-            (isNew || changed)
+            !newAnnouncementAlreadySent;
+
+          const needsChangedAnnouncement =
+            announcementsInitialized &&
+            newAnnouncementAlreadySent &&
+            changed;
+
+          if (
+            needsNewAnnouncement ||
+            needsChangedAnnouncement
           ) {
             const attachments =
               announcement.attachments ?? [];
@@ -1163,9 +1167,14 @@ export default {
             const body =
               plainText(announcement.message);
 
+            const eventType =
+              needsNewAnnouncement
+                ? "announcement_new"
+                : "announcement_changed";
+
             const message = truncate(
               [
-                isNew
+                needsNewAnnouncement
                   ? "새 공지사항"
                   : "공지사항이 변경되었습니다",
                 "",
@@ -1176,13 +1185,8 @@ export default {
               900,
             );
 
-            const eventType =
-              isNew
-                ? "announcement_new"
-                : "announcement_changed";
-
             const sourceId =
-              isNew
+              needsNewAnnouncement
                 ? String(announcement.id)
                 : `${announcement.id}:${fingerprint}`;
 
