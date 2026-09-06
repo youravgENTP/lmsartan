@@ -124,6 +124,8 @@ export default {
       let stage = "start";
 
       try {
+        stage = "checking previous successful runs";
+        
         // A successful previous run means the initial baseline already exists.
         const {
           count: previousSuccessfulRuns,
@@ -142,6 +144,8 @@ export default {
 
         const isBaseline = (previousSuccessfulRuns ?? 0) === 0;
 
+        stage = "creating watcher run";
+
         const {
           data: run,
           error: runInsertError,
@@ -159,6 +163,8 @@ export default {
 
         runId = run.id;
 
+        stage = "loading existing canvas items";
+
         const {
           data: existingRows,
           error: existingError,
@@ -175,6 +181,8 @@ export default {
             (row) => `${row.course_id}:${row.item_id}`,
           ),
         );
+
+        stage = "fetching Canvas courses";
 
         const courses = await canvasGet<CanvasCourse[]>(
           canvasBaseUrl,
@@ -216,6 +224,8 @@ export default {
         let itemsSeen = 0;
 
         for (const course of activeCourses) {
+          stage = `fetching modules for course ${course.id}`;
+
           const modules = await canvasGet<CanvasModule[]>(
             canvasBaseUrl,
             canvasToken,
@@ -255,6 +265,8 @@ export default {
           }
         }
 
+        stage = "inserting new canvas items";
+
         if (newRows.length > 0) {
           const { error: insertError } = await ctx.supabaseAdmin
             .from("canvas_items")
@@ -266,6 +278,8 @@ export default {
         }
 
         // The very first successful run only establishes the baseline.
+        stage = "sending ntfy notifications";
+
         if (!isBaseline) {
           for (const notification of newNotifications) {
             await sendNtfy(
@@ -277,8 +291,9 @@ export default {
             );
           }
         }
+    stage = "finishing watcher run";
 
-        const { error: finishError } = await ctx.supabaseAdmin
+    const { error: finishError } = await ctx.supabaseAdmin
           .from("watcher_runs")
           .update({
             finished_at: new Date().toISOString(),
@@ -301,37 +316,38 @@ export default {
           newItems: newRows.length,
           notificationsSent: isBaseline ? 0 : newNotifications.length,
         });
-      } catch (error) {
-        const message =
-          error instanceof Error
-            ? error.message
-            : typeof error === "object"
-              ? JSON.stringify(error)
-              : String(error);
+    } catch (error) {
+      const detail =
+        error instanceof Error
+          ? `${error.name}: ${error.message}`
+          : JSON.stringify(error, Object.getOwnPropertyNames(error as object));
 
-        if (runId !== null) {
-          await ctx.supabaseAdmin
-            .from("watcher_runs")
-            .update({
-              finished_at: new Date().toISOString(),
-              status: "error",
-              error_message: message,
-            })
-            .eq("id", runId);
-        }
+      const message = `[${stage}] ${detail}`;
 
-        console.error(message);
-
-        return Response.json(
-          {
-            ok: false,
-            error: message,
-          },
-          {
-            status: 500,
-          },
-        );
+      if (runId !== null) {
+        await ctx.supabaseAdmin
+          .from("watcher_runs")
+          .update({
+            finished_at: new Date().toISOString(),
+            status: "error",
+            error_message: message,
+          })
+          .eq("id", runId);
       }
+
+      console.error(message);
+
+      return Response.json(
+        {
+          ok: false,
+          stage,
+          error: detail,
+        },
+        {
+          status: 500,
+        },
+      );
+    }
     },
   ),
 };

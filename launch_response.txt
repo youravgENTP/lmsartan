@@ -1,0 +1,27 @@
+HTTP/1.1 302 Found
+Date: Sun, 06 Sep 2026 10:22:06 GMT
+Server: Apache/2.4.52 (Ubuntu)
+X-Session-Id: 3a0f3463e653dd349cca21d07b5de270
+X-Request-Context-Id: 542032c7-0644-43b8-8ebf-43f99d7b9e79
+X-Rate-Limit-Remaining: 600.0
+X-Canvas-Meta: b=1493276;m=1493276;u=0.01;y=0.00;d=0.00;
+X-Request-Cost: 0.00719336169413873
+Cache-Control: no-cache
+Strict-Transport-Security: max-age=63072000
+Referrer-Policy: no-referrer-when-downgrade
+X-Permitted-Cross-Domain-Policies: none
+X-XSS-Protection: 1; mode=block
+X-Download-Options: noopen
+X-Runtime: 0.008970
+X-Content-Type-Options: nosniff
+X-Powered-By: Phusion Passenger(R) 6.1.1
+Set-Cookie: _csrf_token=v7ziAvKiuQEXstWnK%2B5xiIezl57ZZ%2FUTh3142L22%2FdXxz7ZIypThW3j9kct5lgH9zcbx97ZXvmHuVkCV6c%2FMow%3D%3D; path=/; secure
+Set-Cookie: log_session_id=3a0f3463e653dd349cca21d07b5de270; path=/; secure; HttpOnly
+Set-Cookie: _legacy_normandy_session=AHtbmsZ8XK_EoxmhkH8yuA+O8g0lGo2Ry60x_7SbETYUelyswCaxKkUCANI6C9KbCRyAH743gv3JKCb6kX7nrNzOxYKJWG_KLHwF5bnNm0k6cwuQFXBI7XB9OGRqic5UxcujU0g2SdYaXkA6_vDj6Hb7NImfucDGbYh6MONsIZYViIVKO1mEFihK79L4GyTnsyPfQREse919_MNEJ9CoEvz56QgyXAOrgf1L-JMd8rsKL2kRuinb3QztD42uZL7NErRiJZoI2sgjG64lIg9_JPms7GU3Q_dAXiEJ_HKkSVVYoXdNeGdoElkXNGJX5EKqOg.1R74OANU1iBj6pJqTkXyooc24rg.ap0-zg; path=/; secure; HttpOnly
+Set-Cookie: _normandy_session=AHtbmsZ8XK_EoxmhkH8yuA+O8g0lGo2Ry60x_7SbETYUelyswCaxKkUCANI6C9KbCRyAH743gv3JKCb6kX7nrNzOxYKJWG_KLHwF5bnNm0k6cwuQFXBI7XB9OGRqic5UxcujU0g2SdYaXkA6_vDj6Hb7NImfucDGbYh6MONsIZYViIVKO1mEFihK79L4GyTnsyPfQREse919_MNEJ9CoEvz56QgyXAOrgf1L-JMd8rsKL2kRuinb3QztD42uZL7NErRiJZoI2sgjG64lIg9_JPms7GU3Q_dAXiEJ_HKkSVVYoXdNeGdoElkXNGJX5EKqOg.1R74OANU1iBj6pJqTkXyooc24rg.ap0-zg; path=/; secure; HttpOnly; SameSite=None
+Location: https://e-edu.inje.ac.kr/courses/3281/external_tools/sessionless_launch?verifier=bedc53688264d53f8a751c205abad06c78aafb4012e92ee4cd28eef311b19ba70b4690d994396857cf2d8358df3b966080cad1f7d7ccd9431d591ec0e287567d
+Status: 302 Found
+Transfer-Encoding: chunked
+Content-Type: text/html; charset=utf-8
+
+<html><body>You are being <a href="https://e-edu.inje.ac.kr/courses/3281/external_tools/sessionless_launch?verifier=bedc53688264d53f8a751c205abad06c78aafb4012e92ee4cd28eef311b19ba70b4690d994396857cf2d8358df3b966080cad1f7d7ccd9431d591ec0e287567d">redirected</a>.</body></html>
