@@ -121,6 +121,7 @@ export default {
       const ntfyTopic = requiredEnv("NTFY_TOPIC");
 
       let runId: number | null = null;
+      let stage = "start";
 
       try {
         // A successful previous run means the initial baseline already exists.
@@ -302,7 +303,11 @@ export default {
         });
       } catch (error) {
         const message =
-          error instanceof Error ? error.message : String(error);
+          error instanceof Error
+            ? error.message
+            : typeof error === "object"
+              ? JSON.stringify(error)
+              : String(error);
 
         if (runId !== null) {
           await ctx.supabaseAdmin
