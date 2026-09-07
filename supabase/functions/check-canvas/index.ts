@@ -499,11 +499,6 @@ function formatKst(value: string | null): string | null {
     .replace(" ", " ") + " KST";
 }
 
-async function featureInitialized(function truncate(value: string, max = 400): string {
-  if (value.length <= max) return value;
-  return `${value.slice(0, max - 1)}…`;
-}
-
 async function featureInitialized(
   admin: any,
   eventType: string,
