@@ -475,6 +475,35 @@ function truncate(value: string, max = 400): string {
   return `${value.slice(0, max - 1)}…`;
 }
 
+function formatKst(value: string | null): string | null {
+  if (!value) return null;
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+
+  return new Intl.DateTimeFormat("ko-KR", {
+    timeZone: "Asia/Seoul",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  })
+    .format(date)
+    .replace(/\. /g, "-")
+    .replace(/\.$/, "")
+    .replace(" ", " ") + " KST";
+}
+
+async function featureInitialized(function truncate(value: string, max = 400): string {
+  if (value.length <= max) return value;
+  return `${value.slice(0, max - 1)}…`;
+}
+
 async function featureInitialized(
   admin: any,
   eventType: string,
@@ -928,13 +957,28 @@ export default {
                       .filter(isLearningXItem)
                       .map((item) => item.title);
 
+                  const unlockedAtKst =
+                    formatKst(week.unlock_at);
+
                   const message = lectureTitles.length > 0
                     ? [
                       `${week.week_position}주차 강의가 공개되었습니다.`,
+                      unlockedAtKst
+                        ? `공개시각: ${unlockedAtKst}`
+                        : "",
                       "",
                       ...lectureTitles,
-                    ].join("\n")
-                    : `${week.week_position}주차 강의가 공개되었습니다.`;
+                    ]
+                      .filter(Boolean)
+                      .join("\n")
+                    : [
+                      `${week.week_position}주차 강의가 공개되었습니다.`,
+                      unlockedAtKst
+                        ? `공개시각: ${unlockedAtKst}`
+                        : "",
+                    ]
+                      .filter(Boolean)
+                      .join("\n");
 
                   const sent = await sendLoggedNtfy(
                     ctx.supabaseAdmin,
@@ -1084,43 +1128,11 @@ export default {
                 continue;
               }
 
-              let message =
-                `${module.name}\n${item.title}`;
-
+              // LearningX items may be registered in Canvas long before
+              // students can actually access them. Their notification is
+              // handled only by the LearningX unlock transition above.
               if (isLearningXItem(item)) {
-                const week =
-                  weekSchedule.get(weekPosition);
-
-                if (week?.unlock_at) {
-                  const unlocked =
-                    new Date(week.unlock_at) <= new Date();
-
-                  if (!unlocked) {
-                    message = [
-                      "새 콘텐츠가 등록되었습니다.",
-                      "아직 공개 전입니다.",
-                      "",
-                      module.name,
-                      item.title,
-                      "",
-                      `공개 예정: ${week.unlock_at}`,
-                    ].join("\n");
-                  } else {
-                    message = [
-                      "새 콘텐츠가 등록되었습니다.",
-                      "",
-                      module.name,
-                      item.title,
-                    ].join("\n");
-                  }
-                } else {
-                  message = [
-                    "새 콘텐츠가 등록되었습니다.",
-                    "",
-                    module.name,
-                    item.title,
-                  ].join("\n");
-                }
+                continue;
               }
 
               const sent = await sendLoggedNtfy(
@@ -1131,7 +1143,7 @@ export default {
                 course.id,
                 String(item.id),
                 `[LMSartan] ${course.name}`,
-                message,
+                `${module.name}\n${item.title}`,
                 item.html_url,
               );
 
