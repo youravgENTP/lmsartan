@@ -5,6 +5,15 @@ import {
   planLearningElementConversations,
   runIndependentCheck,
 } from "./inbox.ts";
+import {
+  isCurrentlyAvailableWeekItem,
+  isLearningXContentAvailable,
+  matchesLearningXContent,
+  parseLearningXContentModules,
+  type LearningXContentModule,
+  shouldNotifyLearningXItem,
+  shouldNotifyWeekRelease,
+} from "./week_release.ts";
 
 type CanvasCourse = {
   id: number;
@@ -22,6 +31,12 @@ type CanvasModuleItem = {
   html_url?: string;
   external_url?: string;
   content_id?: number;
+  published?: boolean;
+  unlock_at?: string | null;
+  content_details?: {
+    locked_for_user?: boolean;
+    unlock_at?: string | null;
+  };
 };
 
 type CanvasModule = {
@@ -344,7 +359,10 @@ async function getLearningXWeeks(
   canvasToken: string,
   courseId: number,
   launchItem: CanvasModuleItem,
-): Promise<LearningXWeek[]> {
+): Promise<{
+  weeks: LearningXWeek[];
+  contentModules: LearningXContentModule[];
+}> {
   if (!launchItem.external_url || !launchItem.content_id) {
     throw new Error(
       `LearningX item lacks external_url/content_id in course ${courseId}`,
@@ -448,7 +466,38 @@ async function getLearningXWeeks(
     );
   }
 
-  return await lessonsResult.response.json() as LearningXWeek[];
+  const weeks = await lessonsResult.response.json() as LearningXWeek[];
+
+  const modulesResult = await fetchWithCookies(
+    `${baseUrl}/learningx/api/v1/courses/${courseId}/modules`,
+    {
+      headers: {
+        Accept: "application/json",
+        Authorization: `Bearer ${xnApiToken}`,
+        "X-Requested-With": "XMLHttpRequest",
+        "User-Agent": "Mozilla/5.0",
+        Referer: ltiResult.finalUrl,
+      },
+    },
+    jar,
+  );
+
+  if (!modulesResult.response.ok) {
+    const body = await modulesResult.response.text();
+    throw new Error(
+      `LearningX modules API failed: ${modulesResult.response.status} ${body}`,
+    );
+  }
+
+  const rawModules = await modulesResult.response.json();
+  if (!Array.isArray(rawModules)) {
+    throw new Error("LearningX modules API returned a non-array response");
+  }
+
+  return {
+    weeks,
+    contentModules: parseLearningXContentModules(rawModules),
+  };
 }
 
 async function sha256(value: string): Promise<string> {
@@ -986,7 +1035,7 @@ export default {
             await canvasGetAll<CanvasModule>(
               canvasBaseUrl,
               canvasToken,
-              `/api/v1/courses/${course.id}/modules?include[]=items&per_page=100`,
+              `/api/v1/courses/${course.id}/modules?include[]=items&include[]=content_details&per_page=100`,
             );
 
           const launchItem = modules
@@ -996,7 +1045,10 @@ export default {
           let weekSchedule =
             new Map<number, LearningXWeek>();
 
-          const weeksUnlockedThisRun =
+          let learningxContentByWeek =
+            new Map<number, LearningXContentModule>();
+
+          const itemsIncludedInWeekRelease =
             new Set<number>();
 
           if (launchItem) {
@@ -1004,23 +1056,30 @@ export default {
               `fetching LearningX schedule for course ${course.id}`;
 
             try {
-              const weeks = await getLearningXWeeks(
+              const learningx = await getLearningXWeeks(
                 canvasBaseUrl,
                 canvasToken,
                 course.id,
                 launchItem,
               );
 
-              learningxWeeksSeen += weeks.length;
+              learningxWeeksSeen += learningx.weeks.length;
 
               weekSchedule = new Map(
-                weeks.map((week) => [
+                learningx.weeks.map((week) => [
                   week.week_position,
                   week,
                 ]),
               );
 
-              for (const week of weeks) {
+              learningxContentByWeek = new Map(
+                learningx.contentModules.map((module) => [
+                  module.weekPosition,
+                  module,
+                ]),
+              );
+
+              for (const week of learningx.weeks) {
                 const key =
                   `${course.id}:${week.week_position}`;
 
@@ -1033,29 +1092,43 @@ export default {
                   week.unlock_at === null ||
                   new Date(week.unlock_at) <= now;
 
+                const module = modules.find(
+                  (candidate) =>
+                    moduleWeekPosition(candidate) ===
+                    week.week_position,
+                );
+
+                const learningxContent =
+                  learningxContentByWeek.get(week.week_position)?.items ?? [];
+
+                const availableItems = (module?.items ?? []).filter((item) => {
+                  if (!isCurrentlyAvailableWeekItem(item, unlocked, now)) {
+                    return false;
+                  }
+                  if (!isLearningXItem(item)) return true;
+
+                  const contentItem = learningxContent.find((candidate) =>
+                    matchesLearningXContent(item, candidate)
+                  );
+                  return Boolean(
+                    contentItem && isLearningXContentAvailable(contentItem, now),
+                  );
+                });
+
                 let unlockNotifiedAt =
                   previous?.unlock_notified_at ?? null;
 
-                const transitionedToUnlocked =
-                  Boolean(
-                    learningxInitialized &&
-                    previous &&
-                    !previous.is_unlocked &&
-                    unlocked &&
-                    !previous.unlock_notified_at,
+                const weekShouldBeReleased =
+                  shouldNotifyWeekRelease(
+                    learningxInitialized,
+                    Boolean(previous),
+                    Boolean(unlockNotifiedAt),
+                    availableItems,
                   );
 
-                if (transitionedToUnlocked) {
-                  const module = modules.find(
-                    (candidate) =>
-                      moduleWeekPosition(candidate) ===
-                      week.week_position,
-                  );
-
-                  const lectureTitles =
-                    (module?.items ?? [])
-                      .filter(isLearningXItem)
-                      .map((item) => item.title);
+                if (weekShouldBeReleased) {
+                  const lectureTitles = availableItems
+                    .map((item) => item.title);
 
                   const unlockedAtKst =
                     formatKst(week.unlock_at);
@@ -1097,12 +1170,13 @@ export default {
                   unlockNotifiedAt =
                     new Date().toISOString();
 
-                  weeksUnlockedThisRun.add(
-                    week.week_position,
-                  );
+                  for (const item of availableItems) {
+                    itemsIncludedInWeekRelease.add(item.id);
+                  }
                 } else if (
                   !learningxInitialized &&
-                  unlocked
+                  unlocked &&
+                  availableItems.length > 0
                 ) {
                   // Existing already-open weeks become baseline
                   // without creating historical notifications.
@@ -1111,7 +1185,8 @@ export default {
                 } else if (
                   learningxInitialized &&
                   !previous &&
-                  unlocked
+                  unlocked &&
+                  availableItems.length > 0
                 ) {
                   // A newly discovered course/week may already be old.
                   // Do not flood historical unlock notifications.
@@ -1200,6 +1275,10 @@ export default {
                 continue;
               }
 
+              if (itemsIncludedInWeekRelease.has(item.id)) {
+                continue;
+              }
+
               const itemAlreadySent =
                 await notificationAlreadySent(
                   ctx.supabaseAdmin,
@@ -1230,9 +1309,37 @@ export default {
 
               // LearningX items may be registered in Canvas long before
               // students can actually access them. Their notification is
-              // handled only by the LearningX unlock transition above.
+              // deferred until their week is available and its initial
+              // release notification has already been represented.
               if (isLearningXItem(item)) {
-                continue;
+                const scheduledWeek = weekSchedule.get(weekPosition);
+                const contentItem = learningxContentByWeek.get(weekPosition)
+                  ?.items.find((candidate) =>
+                    matchesLearningXContent(item, candidate)
+                  );
+                const weekUnlocked = Boolean(
+                  scheduledWeek &&
+                    (
+                      scheduledWeek.unlock_at === null ||
+                      new Date(scheduledWeek.unlock_at) <= new Date()
+                    ),
+                );
+                const releaseNotified = Boolean(
+                  existingWeeks.get(`${course.id}:${weekPosition}`)
+                    ?.unlock_notified_at,
+                );
+
+                if (
+                  !contentItem ||
+                  !isLearningXContentAvailable(contentItem, new Date()) ||
+                  !shouldNotifyLearningXItem(
+                    weekUnlocked,
+                    releaseNotified,
+                    false,
+                  )
+                ) {
+                  continue;
+                }
               }
 
               const sent = await sendLoggedNtfy(
