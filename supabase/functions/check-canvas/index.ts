@@ -1,5 +1,10 @@
 import "@supabase/functions-js/edge-runtime.d.ts";
 import { withSupabase } from "@supabase/server";
+import {
+  type CanvasConversation,
+  planLearningElementConversations,
+  runIndependentCheck,
+} from "./inbox.ts";
 
 type CanvasCourse = {
   id: number;
@@ -537,19 +542,24 @@ async function markFeatureInitialized(
 async function notificationAlreadySent(
   admin: any,
   eventType: string,
-  courseId: number,
+  courseId: number | null,
   sourceId: string,
 ): Promise<boolean> {
-  const { count, error } = await admin
+  let query = admin
     .from("notification_log")
     .select("*", {
       count: "exact",
       head: true,
     })
     .eq("event_type", eventType)
-    .eq("course_id", courseId)
     .eq("source_id", sourceId)
     .eq("status", "success");
+
+  query = courseId === null
+    ? query.is("course_id", null)
+    : query.eq("course_id", courseId);
+
+  const { count, error } = await query;
 
   if (error) throw error;
 
@@ -561,7 +571,7 @@ async function sendLoggedNtfy(
   baseUrl: string,
   topic: string,
   eventType: string,
-  courseId: number,
+  courseId: number | null,
   sourceId: string,
   title: string,
   message: string,
@@ -719,8 +729,11 @@ export default {
       let announcementsSeen = 0;
       let announcementChanges = 0;
       let learningxWeeksSeen = 0;
+      let inboxMessagesSeen = 0;
+      let inboxMessagesNew = 0;
 
       const learningxWarnings: string[] = [];
+      const inboxWarnings: string[] = [];
 
       try {
         stage = "checking existing baselines";
@@ -758,6 +771,12 @@ export default {
           await featureInitialized(
             ctx.supabaseAdmin,
             "baseline_learningx",
+          );
+
+        const inboxInitialized =
+          await featureInitialized(
+            ctx.supabaseAdmin,
+            "baseline_learning_element_messages",
           );
 
         stage = "creating watcher run";
@@ -835,6 +854,23 @@ export default {
           ]),
         );
 
+        const {
+          data: existingConversationRows,
+          error: existingConversationsError,
+        } = await ctx.supabaseAdmin
+          .from("canvas_conversations")
+          .select("conversation_id");
+
+        if (existingConversationsError) {
+          throw existingConversationsError;
+        }
+
+        const existingConversationIds = new Set<string>(
+          (existingConversationRows ?? []).map((row) =>
+            String(row.conversation_id)
+          ),
+        );
+
         stage = "fetching Canvas courses";
 
         const courses = await canvasGetAll<CanvasCourse>(
@@ -855,6 +891,75 @@ export default {
             (enrollment) =>
               enrollment.enrollment_state === "active",
           );
+        });
+
+        await runIndependentCheck(async () => {
+          stage = "fetching Canvas inbox conversations";
+
+          const conversations = await canvasGetAll<CanvasConversation>(
+            canvasBaseUrl,
+            canvasToken,
+            "/api/v1/conversations?scope=inbox&per_page=100",
+          );
+          const plan = planLearningElementConversations(
+            conversations,
+            inboxInitialized,
+            existingConversationIds,
+            canvasBaseUrl,
+          );
+
+          inboxMessagesSeen = plan.matched.length;
+          inboxMessagesNew = plan.newItems.length;
+
+          for (const item of plan.newItems) {
+            const sent = await sendLoggedNtfy(
+              ctx.supabaseAdmin,
+              ntfyBaseUrl,
+              ntfyTopic,
+              "message_learning_element_new",
+              item.courseId,
+              item.sourceId,
+              `[LMSartan] ${item.courseName}`,
+              truncate(item.message, 900),
+              item.click,
+            );
+
+            if (sent) notificationsSent += 1;
+          }
+
+          if (plan.matched.length > 0) {
+            const now = new Date().toISOString();
+            const { error: conversationUpsertError } =
+              await ctx.supabaseAdmin
+                .from("canvas_conversations")
+                .upsert(plan.matched.map((item) => ({
+                  conversation_id: item.sourceId,
+                  course_id: item.courseId,
+                  course_name: item.courseName,
+                  subject: item.subject,
+                  last_message: item.message,
+                  last_message_at: item.messageAt,
+                  click_url: item.click,
+                  last_seen_at: now,
+                })), {
+                  onConflict: "conversation_id",
+                });
+
+            if (conversationUpsertError) throw conversationUpsertError;
+          }
+
+          if (!inboxInitialized) {
+            await markFeatureInitialized(
+              ctx.supabaseAdmin,
+              "baseline_learning_element_messages",
+            );
+          }
+        }, (error) => {
+          const message = error instanceof Error
+            ? error.message
+            : String(error);
+          inboxWarnings.push(message);
+          console.error("Canvas inbox warning:", message);
         });
 
         const currentItemRows: Array<{
@@ -1415,6 +1520,10 @@ export default {
 
           learningxWeeksSeen,
           learningxWarnings,
+
+          inboxMessagesSeen,
+          inboxMessagesNew,
+          inboxWarnings,
 
           notificationsSent,
         });
